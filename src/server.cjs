@@ -250,6 +250,82 @@ if (!fs.existsSync(exportDir)) {
   fs.mkdirSync(exportDir);
 }
 
+app.get('/api/trips', (req, res) => {  
+  const { destination, startDate, endDate, keyword, page = 1, size = 10 } = req.query;  
+  let sql = 'SELECT * FROM trips WHERE 1=1';  
+  const params = [];  
+  if (destination) {  
+    sql += ' AND destination LIKE ?';  
+    params.push(`%${destination}%`);  
+  }  
+  if (startDate) {  
+    sql += ' AND startDate >= ?';  
+    params.push(startDate);  
+  }  
+  // 其他条件类似处理...  
+  sql += ` LIMIT ? OFFSET ?`;  
+  params.push(parseInt(size), (page - 1) * size);  
+  db.query(sql, params, (err, results) => {  
+    // 返回结果  
+  });  
+});  
+
+
+app.delete('/api/trips/:tripId', async (req, res) => {  
+  const { tripId } = req.params;  
+  const connection = await db.getConnection();  
+  try {  
+    await connection.beginTransaction();  
+     
+    //  获取该日志的经纬度  
+    const [rows] = await connection.query('SELECT latitude, longitude FROM trips WHERE id = ?', [tripId]);  
+    const { latitude, longitude } = rows[0];  
+    
+    //  删除日志  
+    await connection.query('DELETE FROM trips WHERE id = ?', [tripId]);  
+    
+    //  更新地点访问次数  
+    await connection.query('UPDATE places SET visit_count = visit_count - 1 WHERE latitude = ? AND longitude = ?', [latitude, longitude]);  
+    await connection.commit();  
+    res.sendStatus(204);  
+  } catch (error) {  
+    await connection.rollback();  
+    res.status(500).json({ error: '删除失败' });  
+  } finally {  
+    connection.release();  
+  }  
+});  
+
+app.post('/api/trips', async (req, res) => {  
+  const { destination, latitude, longitude, ...rest } = req.body;  
+  const connection = await db.getConnection();  
+  try {  
+    await connection.beginTransaction();  
+    const [tripResult] = await connection.query('INSERT INTO trips SET ?', { destination, latitude, longitude, ...rest });  
+    await connection.query(`  
+      INSERT INTO places (latitude, longitude, name, visit_count)  
+      VALUES (?, ?, ?, 1)  
+      ON DUPLICATE KEY UPDATE visit_count = visit_count + 1  
+    `, [latitude, longitude, destination]);  
+    await connection.commit();  
+    res.status(201).json({ id: tripResult.insertId });  
+  } catch (error) {  
+    await connection.rollback();  
+    res.status(500).json({ error: '添加失败' });  
+  } finally {  
+    connection.release();  
+  }  
+});  
+
+app.get('/api/places', (req, res) => {  
+  const sql = 'SELECT * FROM places';  
+  db.query(sql, (err, results) => {  
+    if (err) res.status(500).send(err);  
+    else res.json(results);  
+  });  
+});  
+
+
 app.get('/api/export', (req, res) => {
   const { username, type = 'csv', logId } = req.query;
 
@@ -321,7 +397,7 @@ imagePaths.forEach((url, i) => {
     } catch (imgErr) {
       doc.font(fontPath); // 确保 fallback 能正常写字
       doc.text(`⚠️ 第 ${i + 1} 张图片插入失败: ${imgErr.message}`);
-    }
+    } 
   } else {
     doc.text(`⚠️ 找不到图片文件: ${filename}`);
   }
@@ -341,6 +417,7 @@ imagePaths.forEach((url, i) => {
 }
   });
 });
+
 
 
 
